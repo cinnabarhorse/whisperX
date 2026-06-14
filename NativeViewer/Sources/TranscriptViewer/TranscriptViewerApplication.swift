@@ -61,6 +61,9 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
         fileMenu.addItem(withTitle: "Open Library...", action: #selector(openLibrary), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Reload Library", action: #selector(reloadLibrary), keyEquivalent: "r")
         fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Export AI Queue CSV", action: #selector(exportAIQueueCSV), keyEquivalent: "e")
+        fileMenu.addItem(withTitle: "Reveal AI Queue Export", action: #selector(revealAIQueueExport), keyEquivalent: "")
+        fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Reveal Source in Finder", action: #selector(revealSource), keyEquivalent: "")
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -73,6 +76,7 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
         reviewMenu.addItem(withTitle: "Next AI Pick", action: #selector(nextAIPick), keyEquivalent: "\u{F701}")
         reviewMenu.addItem(.separator())
         reviewMenu.addItem(withTitle: "Play/Pause", action: #selector(togglePlayback), keyEquivalent: " ")
+        reviewMenu.addItem(withTitle: "Copy Current AI Pick CSV", action: #selector(copyAIPickCSV), keyEquivalent: "c")
         reviewItem.submenu = reviewMenu
         mainMenu.addItem(reviewItem)
 
@@ -95,6 +99,14 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
         model?.reload()
     }
 
+    @objc func exportAIQueueCSV() {
+        model?.exportAIPickQueueCSV()
+    }
+
+    @objc func revealAIQueueExport() {
+        model?.revealAIPickExportInFinder()
+    }
+
     @objc func revealSource() {
         model?.revealSourceInFinder()
     }
@@ -113,6 +125,10 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
 
     @objc func showAIPlan() {
         model?.inspectorMode = .aiPlan
+    }
+
+    @objc func copyAIPickCSV() {
+        model?.copyCurrentAIPickCSV()
     }
 
     @objc func togglePlayback() {

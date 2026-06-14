@@ -44,6 +44,18 @@ struct RootView: View {
                     Label("AI Plan", systemImage: "sparkles.rectangle.stack")
                 }
                 .disabled(model.analysisArtifacts.isEmpty && model.clipMoments.isEmpty)
+                Button {
+                    model.copyCurrentAIPickCSV()
+                } label: {
+                    Label("Copy AI Pick", systemImage: "doc.on.doc")
+                }
+                .disabled(model.currentAIPick == nil)
+                Button {
+                    model.exportAIPickQueueCSV()
+                } label: {
+                    Label("Export AI Queue", systemImage: "square.and.arrow.down")
+                }
+                .disabled(model.filteredClipMoments.isEmpty)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -129,14 +141,31 @@ struct SidebarView: View {
             FileSearchField(model: model)
             Divider()
             List {
-                Section {
+                Section("Queues") {
+                    QueueRow(
+                        title: "AI review queue",
+                        subtitle: "\(model.count(for: .aiPicks)) ranked picks",
+                        systemImage: "sparkles",
+                        isSelected: model.selectedFileID == nil && model.segmentScope == .aiPicks
+                    ) {
+                        model.startAIAssistedReview()
+                    }
+                    QueueRow(
+                        title: "High hooks",
+                        subtitle: "\(model.count(for: .highHooks)) strongest moments",
+                        systemImage: "flame.fill",
+                        isSelected: model.selectedFileID == nil && model.segmentScope == .highHooks
+                    ) {
+                        model.focusHighHookAIPick()
+                    }
                     QueueRow(
                         title: "All transcripts",
                         subtitle: "\(model.segments.count) moments",
                         systemImage: "rectangle.stack",
-                        isSelected: model.selectedFileID == nil
+                        isSelected: model.selectedFileID == nil && model.segmentScope == .all
                     ) {
                         model.clearFileSelection()
+                        model.setScope(.all)
                     }
                 }
                 Section("Files") {
@@ -316,6 +345,7 @@ struct ReviewConsoleView: View {
             ReviewHeader(model: model)
             Divider()
             PlayerPane(model: model)
+            CurrentAIPickStrip(model: model)
             Divider()
             SegmentFilterBar(model: model)
             Divider()
@@ -331,11 +361,11 @@ struct ReviewHeader: View {
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.selectedFile?.relativePath ?? "All transcripts")
+                Text(model.currentQueueTitle)
                     .font(.title3.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(model.reviewPositionText)
+                Text("\(model.currentAIPickPositionText) · \(model.reviewPositionText)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -454,6 +484,64 @@ struct PlayerPane: View {
     }
 }
 
+struct CurrentAIPickStrip: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        if let pick = model.currentAIPick {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HookBadge(rank: model.hookRank(pick.hookStrength), label: pick.hookStrength)
+                    Text(pick.theme.isEmpty ? "Untitled AI pick" : pick.theme)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(model.formatTime(pick.start)) - \(model.formatTime(pick.end))")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Button {
+                        model.copyCurrentAIPickCSV()
+                    } label: {
+                        Label("Copy CSV Row", systemImage: "doc.on.doc")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Copy current AI pick as CSV")
+                    Button {
+                        model.exportAIPickQueueCSV()
+                    } label: {
+                        Label("Export AI Queue", systemImage: "square.and.arrow.down")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Export filtered AI queue as CSV")
+                }
+
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(pick.relativePath)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(pick.speaker ?? "Unknown speaker")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: 220, alignment: .leading)
+
+                    Text(pick.text.isEmpty ? "No AI transcript text" : pick.text)
+                        .font(.callout)
+                        .lineLimit(3)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .controlBackgroundColor))
+        }
+    }
+}
+
 struct PlayerOverlay: View {
     var segment: TranscriptSegment
     var duration: String
@@ -543,7 +631,9 @@ struct SegmentList: View {
                 ForEach(model.filteredSegments) { segment in
                     SegmentRow(
                         segment: segment,
+                        aiPick: model.matchingClipMoments(for: segment).first,
                         isSelected: model.selectedSegmentID == segment.id,
+                        hookRank: model.matchingClipMoments(for: segment).first.map { model.hookRank($0.hookStrength) },
                         formatTime: model.formatTime
                     )
                     .tag(segment.id)
@@ -573,7 +663,9 @@ struct SegmentList: View {
 
 struct SegmentRow: View {
     var segment: TranscriptSegment
+    var aiPick: ClipMoment?
     var isSelected: Bool
+    var hookRank: Int?
     var formatTime: (Double) -> String
 
     var body: some View {
@@ -591,10 +683,18 @@ struct SegmentRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
+                    if let aiPick, let hookRank {
+                        HookBadge(rank: hookRank, label: aiPick.hookStrength)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+                if let aiPick, !aiPick.theme.isEmpty {
+                    Text(aiPick.theme)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                }
                 Text(segment.text.isEmpty ? "No transcript text" : segment.text)
                     .font(.body)
                     .lineLimit(5)
@@ -1062,6 +1162,10 @@ struct ShortcutLayer: View {
                 .keyboardShortcut("b", modifiers: [])
             Button("AI Plan") { model.inspectorMode = .aiPlan }
                 .keyboardShortcut("a", modifiers: [])
+            Button("Copy AI Pick CSV") { model.copyCurrentAIPickCSV() }
+                .keyboardShortcut("c", modifiers: [])
+            Button("Export AI Queue") { model.exportAIPickQueueCSV() }
+                .keyboardShortcut("e", modifiers: [])
             Button("Previous AI Pick") { model.focusPreviousAIPick() }
                 .keyboardShortcut(.upArrow, modifiers: [])
             Button("Next AI Pick") { model.focusNextAIPick() }

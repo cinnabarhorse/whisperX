@@ -16,7 +16,7 @@ struct LibraryStoreTests {
         #expect(snapshot.segments.first?.speaker == "SPEAKER_00")
         #expect(snapshot.segments.first?.language == "zh")
         #expect(snapshot.segments.first?.text == "AI 可以帮我做基础工作")
-        #expect(snapshot.clipMoments.count == 1)
+        #expect(snapshot.clipMoments.count == 2)
         #expect(snapshot.clipMoments.first?.start == 5)
         #expect(snapshot.clipMoments.first?.end == 8.75)
         #expect(snapshot.clipMoments.first?.theme == "AI lacks taste")
@@ -35,6 +35,14 @@ struct LibraryStoreTests {
     func parsesCRLFCSV() {
         let rows = CSV.parse("file,relative_file,output_dir,json,status\r\none,two,three,four,done\r\n")
         #expect(rows == [["file", "relative_file", "output_dir", "json", "status"], ["one", "two", "three", "four", "done"]])
+    }
+
+    @Test("clip moments preserve AI ranking order")
+    func preservesClipMomentOrder() throws {
+        let fixture = try Fixture()
+        let snapshot = try LibraryStore().load(libraryURL: fixture.libraryURL)
+
+        #expect(snapshot.clipMoments.map(\.theme) == ["AI lacks taste", "Lower ranked follow-up"])
     }
 }
 
@@ -95,7 +103,8 @@ private struct Fixture {
 
         let clipMomentRows = [
             ["file", "start_time", "end_time", "theme", "hook_strength", "speaker", "text"],
-            ["Day 1/C0001.MP4", "00:05", "00:08.75", "AI lacks taste", "high", "SPEAKER_01", "但是味道还是人来判断"]
+            ["Day 1/C0001.MP4", "00:05", "00:08.75", "AI lacks taste", "high", "SPEAKER_01", "但是味道还是人来判断"],
+            ["Day 1/C0001.MP4", "00:01.25", "00:04.50", "Lower ranked follow-up", "medium", "SPEAKER_00", "AI 可以帮我做基础工作"]
         ]
         try CSV.encode(rows: clipMomentRows)
             .write(to: libraryURL.appendingPathComponent("clip_moments.csv"), atomically: true, encoding: .utf8)

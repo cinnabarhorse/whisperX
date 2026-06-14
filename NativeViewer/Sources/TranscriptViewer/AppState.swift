@@ -161,11 +161,43 @@ final class LibraryViewModel {
         return "\(formatTime(selectedSegment.start)) - \(formatTime(selectedSegment.end))"
     }
 
+    var currentAIPickPositionText: String {
+        guard let currentAIPick,
+              let index = filteredClipMoments.firstIndex(where: { $0.id == currentAIPick.id })
+        else {
+            return filteredClipMoments.isEmpty ? "No AI picks" : "\(filteredClipMoments.count) AI picks"
+        }
+        return "AI pick \(index + 1) of \(filteredClipMoments.count)"
+    }
+
+    var currentQueueTitle: String {
+        if let selectedFile {
+            return selectedFile.relativePath
+        }
+        switch segmentScope {
+        case .all:
+            return "All transcripts"
+        case .aiPicks:
+            return "AI review queue"
+        case .highHooks:
+            return "High-hook queue"
+        case .noAIPick:
+            return "Transcript-only moments"
+        }
+    }
+
     var selectedSourcePath: String {
         selectedSegment?.sourceURL.path ?? ""
     }
 
     var filteredSegments: [TranscriptSegment] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if selectedFileID == nil, segmentScope == .aiPicks || segmentScope == .highHooks {
+            return rankedAISegments(highHooksOnly: segmentScope == .highHooks).filter { segment in
+                query.isEmpty || matches(segment, query: query)
+            }
+        }
+
         let byFile: [TranscriptSegment]
         if let selectedFileID {
             byFile = segments.filter { $0.fileID == selectedFileID }
@@ -186,13 +218,8 @@ final class LibraryViewModel {
             }
         }
 
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return byScope }
-        return byScope.filter { segment in
-            segment.text.localizedCaseInsensitiveContains(query)
-                || segment.relativePath.localizedCaseInsensitiveContains(query)
-                || (segment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
-        }
+        return byScope.filter { matches($0, query: query) }
     }
 
     var clipThemes: [String] {
@@ -213,17 +240,6 @@ final class LibraryViewModel {
                     || moment.theme.localizedCaseInsensitiveContains(query)
                     || (moment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
                 return matchesTheme && matchesQuery
-            }
-            .sorted { lhs, rhs in
-                let lhsRank = hookRank(lhs.hookStrength)
-                let rhsRank = hookRank(rhs.hookStrength)
-                if lhsRank != rhsRank {
-                    return lhsRank > rhsRank
-                }
-                if lhs.relativePath == rhs.relativePath {
-                    return lhs.start < rhs.start
-                }
-                return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
             }
     }
 
@@ -297,7 +313,7 @@ final class LibraryViewModel {
     func startAIAssistedReview() {
         selectedFileID = nil
         inspectorMode = .aiPlan
-        segmentScope = .all
+        segmentScope = .aiPicks
         guard let firstPick = filteredClipMoments.first else {
             statusMessage = "No AI picks available"
             return
@@ -309,7 +325,7 @@ final class LibraryViewModel {
     func focusHighHookAIPick() {
         selectedFileID = nil
         inspectorMode = .aiPlan
-        segmentScope = .all
+        segmentScope = .highHooks
         guard let pick = filteredClipMoments.first(where: { hookRank($0.hookStrength) >= 5 })
             ?? clipMoments.first(where: { hookRank($0.hookStrength) >= 5 })
             ?? filteredClipMoments.first
@@ -417,16 +433,42 @@ final class LibraryViewModel {
         NSWorkspace.shared.activateFileViewerSelecting([segment.sourceURL])
     }
 
+    func copyCurrentAIPickCSV() {
+        guard let pick = currentAIPick else {
+            statusMessage = "No AI pick selected"
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(CSV.encode(rows: [aiPickCSVHeader, csvRow(for: pick)]).trimmingCharacters(in: .newlines), forType: .string)
+        statusMessage = "Copied AI pick CSV row"
+    }
+
+    func exportAIPickQueueCSV() {
+        guard let libraryURL else { return }
+        let url = libraryURL.appendingPathComponent("viewer-ai-picks.csv")
+        let rows = [aiPickCSVHeader] + filteredClipMoments.map(csvRow)
+        do {
+            try CSV.encode(rows: rows).write(to: url, atomically: true, encoding: .utf8)
+            statusMessage = "Exported \(filteredClipMoments.count) AI picks to \(url.lastPathComponent)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func revealAIPickExportInFinder() {
+        guard let libraryURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([libraryURL.appendingPathComponent("viewer-ai-picks.csv")])
+    }
+
     func count(for scope: SegmentScope) -> Int {
         switch scope {
         case .all:
             segments.count
         case .aiPicks:
-            segments.filter { !matchingClipMoments(for: $0).isEmpty }.count
+            rankedAISegments(highHooksOnly: false).count
         case .highHooks:
-            segments.filter { segment in
-                matchingClipMoments(for: segment).contains { hookRank($0.hookStrength) >= 5 }
-            }.count
+            rankedAISegments(highHooksOnly: true).count
         case .noAIPick:
             segments.filter { matchingClipMoments(for: $0).isEmpty }.count
         }
@@ -499,6 +541,42 @@ final class LibraryViewModel {
             let rhsDistance = abs(((rhs.start + rhs.end) / 2) - midpoint)
             return lhsDistance < rhsDistance
         }
+    }
+
+    private func rankedAISegments(highHooksOnly: Bool) -> [TranscriptSegment] {
+        var seen = Set<String>()
+        return filteredClipMoments.compactMap { clipMoment in
+            guard !highHooksOnly || hookRank(clipMoment.hookStrength) >= 5,
+                  let segment = bestSegment(for: clipMoment),
+                  !seen.contains(segment.id)
+            else {
+                return nil
+            }
+            seen.insert(segment.id)
+            return segment
+        }
+    }
+
+    private func matches(_ segment: TranscriptSegment, query: String) -> Bool {
+        segment.text.localizedCaseInsensitiveContains(query)
+            || segment.relativePath.localizedCaseInsensitiveContains(query)
+            || (segment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
+    }
+
+    private var aiPickCSVHeader: [String] {
+        ["file", "start_time", "end_time", "theme", "hook_strength", "speaker", "text"]
+    }
+
+    private func csvRow(for pick: ClipMoment) -> [String] {
+        [
+            pick.relativePath,
+            formatTime(pick.start),
+            formatTime(pick.end),
+            pick.theme,
+            pick.hookStrength,
+            pick.speaker ?? "",
+            pick.text
+        ]
     }
 
     private func overlaps(_ clipMoment: ClipMoment, _ segment: TranscriptSegment) -> Bool {
