@@ -7,10 +7,14 @@ import TranscriptViewerCore
 @MainActor
 @Observable
 final class LibraryViewModel {
+    private static let allThemesFilter = "All Themes"
+    private static let allQualitiesFilter = "All Qualities"
+
     enum SegmentScope: String, CaseIterable, Identifiable {
         case all
         case aiPicks
         case highHooks
+        case people
         case noAIPick
 
         var id: String { rawValue }
@@ -20,6 +24,7 @@ final class LibraryViewModel {
             case .all: "All"
             case .aiPicks: "AI Picks"
             case .highHooks: "High Hooks"
+            case .people: "People"
             case .noAIPick: "No AI Pick"
             }
         }
@@ -29,6 +34,7 @@ final class LibraryViewModel {
             case .all: "text.line.first.and.arrowtriangle.forward"
             case .aiPicks: "sparkles"
             case .highHooks: "flame"
+            case .people: "person.crop.rectangle.stack"
             case .noAIPick: "line.3.horizontal.decrease.circle"
             }
         }
@@ -37,6 +43,7 @@ final class LibraryViewModel {
     enum InspectorMode: String, CaseIterable, Identifiable {
         case moment
         case aiPlan
+        case person
 
         var id: String { rawValue }
 
@@ -44,6 +51,7 @@ final class LibraryViewModel {
             switch self {
             case .moment: "AI Pick"
             case .aiPlan: "AI Plan"
+            case .person: "Person"
             }
         }
     }
@@ -61,20 +69,29 @@ final class LibraryViewModel {
     var files: [TranscriptFile] = []
     var segments: [TranscriptSegment] = []
     var clipMoments: [ClipMoment] = []
+    var clipTags: [ClipTag] = []
     var analysisArtifacts: [AnalysisArtifact] = []
+    var people: [PersonProfile] = []
     var selectedFileID: String?
     var selectedSegmentID: String?
     var selectedClipMomentID: String?
     var selectedAnalysisArtifactID: String?
+    var selectedPersonID: String?
     var fileSearchText = ""
+    var personSearchText = ""
     var searchText = ""
     var segmentScope: SegmentScope = .all
     var inspectorMode: InspectorMode = .moment
     var isLoading = false
+    var isScanningPeople = false
     var statusMessage = "Open a WhisperX _ai_library folder."
 
     var clipSearchText = ""
-    var clipThemeFilter = "All Themes"
+    var clipThemeFilter = allThemesFilter
+    var clipQualityFilter = allQualitiesFilter
+    var personDraftName = ""
+    var personDraftTags = ""
+    var personDraftNotes = ""
 
     init(initialPath: String?) {
         recentLibraries = defaults.stringArray(forKey: recentLibrariesKey) ?? []
@@ -103,6 +120,24 @@ final class LibraryViewModel {
         return clipMoments.first { $0.id == selectedClipMomentID }
     }
 
+    var selectedClipTags: ClipTag? {
+        if let selectedSegment {
+            return clipTags(for: selectedSegment.relativePath)
+        }
+        if let selectedClipMoment {
+            return clipTags(for: selectedClipMoment.relativePath)
+        }
+        if let selectedFile {
+            return clipTags(for: selectedFile.relativePath)
+        }
+        return nil
+    }
+
+    var selectedPerson: PersonProfile? {
+        guard let selectedPersonID else { return nil }
+        return people.first { $0.id == selectedPersonID }
+    }
+
     var currentAIPick: ClipMoment? {
         guard let selectedSegment else {
             return selectedClipMoment
@@ -126,6 +161,19 @@ final class LibraryViewModel {
             $0.relativePath.localizedCaseInsensitiveContains(query)
                 || $0.status.localizedCaseInsensitiveContains(query)
                 || ($0.language?.localizedCaseInsensitiveContains(query) ?? false)
+                || clipTagsMatch(relativePath: $0.relativePath, query: query)
+        }
+    }
+
+    var filteredPeople: [PersonProfile] {
+        let query = personSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = people.filter { !$0.appearances.isEmpty || !$0.displayName.isEmpty || !$0.tags.isEmpty || !$0.notes.isEmpty }
+        guard !query.isEmpty else { return base }
+        return base.filter { person in
+            person.title.localizedCaseInsensitiveContains(query)
+                || person.tags.joined(separator: " ").localizedCaseInsensitiveContains(query)
+                || person.notes.localizedCaseInsensitiveContains(query)
+                || person.appearances.contains { $0.relativePath.localizedCaseInsensitiveContains(query) }
         }
     }
 
@@ -181,6 +229,8 @@ final class LibraryViewModel {
             return "AI review queue"
         case .highHooks:
             return "High-hook queue"
+        case .people:
+            return selectedPerson?.title ?? "People queue"
         case .noAIPick:
             return "Transcript-only moments"
         }
@@ -205,7 +255,14 @@ final class LibraryViewModel {
             byFile = segments
         }
 
-        let byScope = byFile.filter { segment in
+        let byPerson: [TranscriptSegment]
+        if let selectedPerson {
+            byPerson = byFile.filter { selectedPerson.fileIDs.contains($0.fileID) }
+        } else {
+            byPerson = byFile
+        }
+
+        let byScope = byPerson.filter { segment in
             switch segmentScope {
             case .all:
                 true
@@ -213,6 +270,8 @@ final class LibraryViewModel {
                 !matchingClipMoments(for: segment).isEmpty
             case .highHooks:
                 matchingClipMoments(for: segment).contains { hookRank($0.hookStrength) >= 5 }
+            case .people:
+                people.contains { $0.fileIDs.contains(segment.fileID) }
             case .noAIPick:
                 matchingClipMoments(for: segment).isEmpty
             }
@@ -224,7 +283,14 @@ final class LibraryViewModel {
 
     var clipThemes: [String] {
         let themes = Set(clipMoments.map(\.theme).filter { !$0.isEmpty })
-        return ["All Themes"] + themes.sorted {
+        return [Self.allThemesFilter] + themes.sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+    }
+
+    var clipQualities: [String] {
+        let qualities = Set(clipMoments.map(\.quality).filter { !$0.isEmpty })
+        return [Self.allQualitiesFilter] + qualities.sorted {
             $0.localizedStandardCompare($1) == .orderedAscending
         }
     }
@@ -233,13 +299,16 @@ final class LibraryViewModel {
         let query = clipSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return clipMoments
             .filter { moment in
-                let matchesTheme = clipThemeFilter == "All Themes" || moment.theme == clipThemeFilter
+                let matchesTheme = clipThemeFilter == Self.allThemesFilter || moment.theme == clipThemeFilter
+                let matchesQuality = clipQualityFilter == Self.allQualitiesFilter || moment.quality == clipQualityFilter
                 let matchesQuery = query.isEmpty
                     || moment.text.localizedCaseInsensitiveContains(query)
                     || moment.relativePath.localizedCaseInsensitiveContains(query)
                     || moment.theme.localizedCaseInsensitiveContains(query)
+                    || moment.quality.localizedCaseInsensitiveContains(query)
                     || (moment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
-                return matchesTheme && matchesQuery
+                    || clipTagsMatch(relativePath: moment.relativePath, query: query)
+                return matchesTheme && matchesQuality && matchesQuery
             }
     }
 
@@ -265,12 +334,19 @@ final class LibraryViewModel {
             files = snapshot.files
             segments = snapshot.segments
             clipMoments = snapshot.clipMoments
+            clipTags = snapshot.clipTags
             analysisArtifacts = snapshot.analysisArtifacts
+            people = snapshot.people
             selectedAnalysisArtifactID = analysisArtifacts.first?.id
+            selectedPersonID = nil
+            resetPersonDrafts()
             if !clipThemes.contains(clipThemeFilter) {
-                clipThemeFilter = "All Themes"
+                clipThemeFilter = Self.allThemesFilter
             }
-            statusMessage = "\(files.count) files, \(segments.count) transcript segments, \(clipMoments.count) AI picks"
+            if !clipQualities.contains(clipQualityFilter) {
+                clipQualityFilter = Self.allQualitiesFilter
+            }
+            statusMessage = "\(files.count) files, \(segments.count) transcript segments, \(clipMoments.count) AI picks, \(clipTags.count) tagged clips, \(people.count) people"
             rememberLibrary(snapshot.libraryURL)
             if let firstPick = filteredClipMoments.first(where: { bestSegment(for: $0) != nil }) {
                 selectedFileID = nil
@@ -297,6 +373,8 @@ final class LibraryViewModel {
     }
 
     func choose(file: TranscriptFile?) {
+        selectedPersonID = nil
+        resetPersonDrafts()
         selectedFileID = file?.id
         selectedSegmentID = filteredSegments.first?.id
         if let segment = selectedSegment {
@@ -310,8 +388,30 @@ final class LibraryViewModel {
         choose(file: nil)
     }
 
+    func choose(person: PersonProfile?) {
+        selectedPersonID = person?.id
+        selectedFileID = nil
+        inspectorMode = person == nil ? inspectorMode : .person
+        segmentScope = person == nil ? segmentScope : .all
+        loadPersonDrafts()
+        if let appearance = person?.appearances.first,
+           let segment = bestSegment(relativePath: appearance.relativePath, timestamp: appearance.timestamp) {
+            focus(segment, autoplay: false)
+            player.seek(to: CMTime(seconds: appearance.timestamp, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        } else {
+            selectedSegmentID = filteredSegments.first?.id
+            focusSelectedWithoutAutoplay()
+        }
+    }
+
+    func clearPersonSelection() {
+        choose(person: nil)
+    }
+
     func startAIAssistedReview() {
         selectedFileID = nil
+        selectedPersonID = nil
+        resetPersonDrafts()
         inspectorMode = .aiPlan
         segmentScope = .aiPicks
         guard let firstPick = filteredClipMoments.first else {
@@ -324,6 +424,8 @@ final class LibraryViewModel {
 
     func focusHighHookAIPick() {
         selectedFileID = nil
+        selectedPersonID = nil
+        resetPersonDrafts()
         inspectorMode = .aiPlan
         segmentScope = .highHooks
         guard let pick = filteredClipMoments.first(where: { hookRank($0.hookStrength) >= 5 })
@@ -486,13 +588,70 @@ final class LibraryViewModel {
     func count(for scope: SegmentScope) -> Int {
         switch scope {
         case .all:
-            segments.count
+            return segments.count
         case .aiPicks:
-            rankedAISegments(highHooksOnly: false).count
+            return rankedAISegments(highHooksOnly: false).count
         case .highHooks:
-            rankedAISegments(highHooksOnly: true).count
+            return rankedAISegments(highHooksOnly: true).count
+        case .people:
+            let fileIDs = Set(people.flatMap { $0.fileIDs })
+            return segments.filter { fileIDs.contains($0.fileID) }.count
         case .noAIPick:
-            segments.filter { matchingClipMoments(for: $0).isEmpty }.count
+            return segments.filter { matchingClipMoments(for: $0).isEmpty }.count
+        }
+    }
+
+    func scanPeople() {
+        guard let libraryURL else { return }
+        let scanFiles = files.filter { $0.status == "done" }
+        guard !scanFiles.isEmpty else {
+            statusMessage = "No completed videos available for people scan"
+            return
+        }
+        isScanningPeople = true
+        statusMessage = "Scanning \(scanFiles.count) videos for faces..."
+        Task {
+            do {
+                let appearances = try await FaceIndexer().scan(files: scanFiles)
+                try store.replacePeopleIndex(libraryURL: libraryURL, appearances: appearances)
+                let snapshot = try store.load(libraryURL: libraryURL)
+                files = snapshot.files
+                segments = snapshot.segments
+                clipMoments = snapshot.clipMoments
+                clipTags = snapshot.clipTags
+                analysisArtifacts = snapshot.analysisArtifacts
+                people = snapshot.people
+                if let selectedPersonID, !people.contains(where: { $0.id == selectedPersonID }) {
+                    self.selectedPersonID = nil
+                    resetPersonDrafts()
+                } else {
+                    loadPersonDrafts()
+                }
+                statusMessage = "Found \(people.count) people across \(appearances.count) face appearances"
+            } catch {
+                statusMessage = "People scan failed: \(error.localizedDescription)"
+            }
+            isScanningPeople = false
+        }
+    }
+
+    func saveSelectedPersonTags() {
+        guard let libraryURL, let selectedPersonID, let index = people.firstIndex(where: { $0.id == selectedPersonID }) else {
+            return
+        }
+        let updated = PersonProfile(
+            id: people[index].id,
+            displayName: personDraftName.trimmingCharacters(in: .whitespacesAndNewlines),
+            tags: parseTags(personDraftTags),
+            notes: personDraftNotes.trimmingCharacters(in: .whitespacesAndNewlines),
+            appearances: people[index].appearances
+        )
+        do {
+            try store.savePersonTags(libraryURL: libraryURL, person: updated)
+            people[index] = updated
+            statusMessage = "Saved tags for \(updated.title)"
+        } catch {
+            statusMessage = "Could not save person tags: \(error.localizedDescription)"
         }
     }
 
@@ -501,6 +660,10 @@ final class LibraryViewModel {
             clipMoment.relativePath == segment.relativePath && overlaps(clipMoment, segment)
         }
         .sorted { hookRank($0.hookStrength) > hookRank($1.hookStrength) }
+    }
+
+    func clipTags(for relativePath: String) -> ClipTag? {
+        clipTags.first { $0.relativePath == relativePath }
     }
 
     func hookRank(_ hookStrength: String) -> Int {
@@ -583,10 +746,11 @@ final class LibraryViewModel {
         segment.text.localizedCaseInsensitiveContains(query)
             || segment.relativePath.localizedCaseInsensitiveContains(query)
             || (segment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
+            || clipTagsMatch(relativePath: segment.relativePath, query: query)
     }
 
     private var aiPickCSVHeader: [String] {
-        ["file", "start_time", "end_time", "theme", "hook_strength", "speaker", "text"]
+        ["file", "start_time", "end_time", "theme", "hook_strength", "quality", "speaker", "text"]
     }
 
     private func csvRow(for pick: ClipMoment) -> [String] {
@@ -596,9 +760,22 @@ final class LibraryViewModel {
             formatTime(pick.end),
             pick.theme,
             pick.hookStrength,
+            pick.quality,
             pick.speaker ?? "",
             pick.text
         ]
+    }
+
+    private func bestSegment(relativePath: String, timestamp: Double) -> TranscriptSegment? {
+        let candidates = segments.filter { $0.relativePath == relativePath }
+        if let containing = candidates.first(where: { $0.start <= timestamp && timestamp <= $0.end }) {
+            return containing
+        }
+        return candidates.min { lhs, rhs in
+            let lhsDistance = min(abs(lhs.start - timestamp), abs(lhs.end - timestamp))
+            let rhsDistance = min(abs(rhs.start - timestamp), abs(rhs.end - timestamp))
+            return lhsDistance < rhsDistance
+        }
     }
 
     private func overlaps(_ clipMoment: ClipMoment, _ segment: TranscriptSegment) -> Bool {
@@ -637,11 +814,15 @@ final class LibraryViewModel {
         files = []
         segments = []
         clipMoments = []
+        clipTags = []
         analysisArtifacts = []
+        people = []
         selectedFileID = nil
         selectedSegmentID = nil
         selectedClipMomentID = nil
         selectedAnalysisArtifactID = nil
+        selectedPersonID = nil
+        resetPersonDrafts()
         player.pause()
         if let boundaryObserver {
             player.removeTimeObserver(boundaryObserver)
@@ -649,5 +830,38 @@ final class LibraryViewModel {
         }
         player.replaceCurrentItem(with: nil)
         currentPlayerURL = nil
+    }
+
+    private func loadPersonDrafts() {
+        guard let selectedPerson else {
+            resetPersonDrafts()
+            return
+        }
+        personDraftName = selectedPerson.displayName
+        personDraftTags = selectedPerson.tags.joined(separator: ", ")
+        personDraftNotes = selectedPerson.notes
+    }
+
+    private func resetPersonDrafts() {
+        personDraftName = ""
+        personDraftTags = ""
+        personDraftNotes = ""
+    }
+
+    private func parseTags(_ text: String) -> [String] {
+        text.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func clipTagsMatch(relativePath: String, query: String) -> Bool {
+        guard let clipTag = clipTags(for: relativePath) else { return false }
+        return clipTag.tags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.locationTags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.spokenLanguageTags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.themeTags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.entityTags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.interviewLanguageTags.contains { $0.localizedCaseInsensitiveContains(query) }
+            || clipTag.qualityTags.contains { $0.localizedCaseInsensitiveContains(query) }
     }
 }

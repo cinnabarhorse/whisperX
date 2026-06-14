@@ -56,6 +56,12 @@ struct RootView: View {
                     Label("Export AI Queue", systemImage: "square.and.arrow.down")
                 }
                 .disabled(model.filteredClipMoments.isEmpty)
+                Button {
+                    model.scanPeople()
+                } label: {
+                    Label("Scan People", systemImage: "person.crop.rectangle.stack")
+                }
+                .disabled(model.libraryURL == nil || model.isScanningPeople)
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -140,6 +146,8 @@ struct SidebarView: View {
             Divider()
             FileSearchField(model: model)
             Divider()
+            PersonSearchField(model: model)
+            Divider()
             List {
                 Section("Queues") {
                     QueueRow(
@@ -168,9 +176,62 @@ struct SidebarView: View {
                         model.setScope(.all)
                     }
                 }
+                Section {
+                    QueueRow(
+                        title: "All people",
+                        subtitle: "\(model.people.count) people",
+                        systemImage: "person.2",
+                        isSelected: model.selectedPersonID == nil
+                    ) {
+                        model.clearPersonSelection()
+                    }
+                    Button {
+                        model.scanPeople()
+                    } label: {
+                        HStack(spacing: 10) {
+                            if model.isScanningPeople {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 20)
+                            } else {
+                                Image(systemName: "viewfinder")
+                                    .foregroundStyle(.tint)
+                                    .frame(width: 20)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.isScanningPeople ? "Scanning people" : "Scan video faces")
+                                    .font(.callout.weight(.medium))
+                                Text("Local Vision model")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 7)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isScanningPeople)
+                }
+                Section("People") {
+                    if model.filteredPeople.isEmpty {
+                        Text(model.people.isEmpty ? "No people indexed" : "No matching people")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.filteredPeople) { person in
+                            PersonRow(person: person, isSelected: model.selectedPersonID == person.id) {
+                                model.choose(person: person)
+                            }
+                        }
+                    }
+                }
                 Section("Files") {
                     ForEach(model.filteredFiles) { file in
-                        FileRow(file: file, isSelected: model.selectedFileID == file.id) {
+                        FileRow(
+                            file: file,
+                            clipTag: model.clipTags(for: file.relativePath),
+                            isSelected: model.selectedFileID == file.id
+                        ) {
                             model.choose(file: file)
                         }
                     }
@@ -210,10 +271,34 @@ struct LibraryHeader: View {
                 MetricTile(value: "\(model.doneFileCount)", label: "done")
                 MetricTile(value: "\(model.segments.count)", label: "moments")
                 MetricTile(value: "\(model.clipMoments.count)", label: "AI picks")
-                MetricTile(value: "\(model.highPriorityClipMomentCount)", label: "high hook")
+                MetricTile(value: "\(model.people.count)", label: "people")
             }
         }
         .padding(14)
+    }
+}
+
+struct PersonSearchField: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Filter people", text: Binding(get: { model.personSearchText }, set: { model.personSearchText = $0 }))
+                .textFieldStyle(.plain)
+            if !model.personSearchText.isEmpty {
+                Button {
+                    model.personSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 }
 
@@ -295,6 +380,7 @@ struct QueueRow: View {
 
 struct FileRow: View {
     var file: TranscriptFile
+    var clipTag: ClipTag?
     var isSelected: Bool
     var action: () -> Void
 
@@ -314,6 +400,51 @@ struct FileRow: View {
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    if let clipTag, !clipTag.displayTags.isEmpty {
+                        Text(clipTag.displayTags.prefix(4).joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 7)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct PersonRow: View {
+    var person: PersonProfile
+    var isSelected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "person.crop.circle")
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(person.title)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text("\(person.videoCount) videos")
+                        Text("\(person.appearanceCount) faces")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if !person.tags.isEmpty {
+                        Text(person.tags.joined(separator: ", "))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -603,7 +734,7 @@ struct SegmentFilterBar: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search transcript, speaker, file", text: Binding(
+                TextField("Search transcript, speaker, file, tags", text: Binding(
                     get: { model.searchText },
                     set: { model.searchText = $0 }
                 ))
@@ -745,9 +876,154 @@ struct InspectorView: View {
                 MomentInspectorView(model: model)
             case .aiPlan:
                 AIPlanInspectorView(model: model)
+            case .person:
+                PersonInspectorView(model: model)
             }
         }
         .navigationTitle("Inspector")
+    }
+}
+
+struct PersonInspectorView: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        if let person = model.selectedPerson {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PersonTagPanel(model: model, person: person)
+                    PersonAppearancesPanel(model: model, person: person)
+                }
+                .padding(16)
+            }
+        } else {
+            ContentUnavailableView("Select a person", systemImage: "person.crop.rectangle")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+struct PersonTagPanel: View {
+    let model: LibraryViewModel
+    var person: PersonProfile
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(person.title, systemImage: "person.crop.circle")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    model.saveSelectedPersonTags()
+                } label: {
+                    Label("Save", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    DetailLabel("Name")
+                    TextField("Name or role", text: Binding(get: { model.personDraftName }, set: { model.personDraftName = $0 }))
+                }
+                GridRow {
+                    DetailLabel("Tags")
+                    TextField("Comma separated tags", text: Binding(get: { model.personDraftTags }, set: { model.personDraftTags = $0 }))
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                DetailLabel("Notes")
+                TextEditor(text: Binding(get: { model.personDraftNotes }, set: { model.personDraftNotes = $0 }))
+                    .frame(minHeight: 90)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+            }
+            HStack(spacing: 8) {
+                MetricTile(value: "\(person.videoCount)", label: "videos")
+                MetricTile(value: "\(person.appearanceCount)", label: "faces")
+            }
+        }
+        .panelStyle()
+    }
+}
+
+struct PersonAppearancesPanel: View {
+    let model: LibraryViewModel
+    var person: PersonProfile
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Videos", systemImage: "film.stack")
+                .font(.headline)
+            if person.appearances.isEmpty {
+                ContentUnavailableView("No face appearances", systemImage: "person.crop.rectangle")
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(groupedAppearances, id: \.relativePath) { group in
+                        PersonVideoCard(
+                            relativePath: group.relativePath,
+                            appearances: group.appearances,
+                            formatTime: model.formatTime
+                        ) { appearance in
+                            model.choose(person: person)
+                            if let segment = model.filteredSegments.first(where: { $0.relativePath == appearance.relativePath && $0.start <= appearance.timestamp && appearance.timestamp <= $0.end })
+                                ?? model.filteredSegments.first(where: { $0.relativePath == appearance.relativePath }) {
+                                model.focus(segment, autoplay: true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .panelStyle()
+    }
+
+    private var groupedAppearances: [(relativePath: String, appearances: [PersonAppearance])] {
+        Dictionary(grouping: person.appearances, by: \.relativePath)
+            .map { key, value in (key, value.sorted { $0.timestamp < $1.timestamp }) }
+            .sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+    }
+}
+
+struct PersonVideoCard: View {
+    var relativePath: String
+    var appearances: [PersonAppearance]
+    var formatTime: (Double) -> String
+    var play: (PersonAppearance) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(relativePath)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Text("\(appearances.count) faces")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 6)], alignment: .leading, spacing: 6) {
+                ForEach(Array(appearances.prefix(12))) { appearance in
+                    Button {
+                        play(appearance)
+                    } label: {
+                        Text(formatTime(appearance.timestamp))
+                            .monospacedDigit()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 1)
+        }
     }
 }
 
@@ -759,6 +1035,7 @@ struct MomentInspectorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     InspectorSummary(segment: segment, model: model)
+                    ClipTagsPanel(clipTag: model.selectedClipTags)
                     AIMatchesPanel(model: model, segment: segment)
                     AIRecommendationPanel(model: model)
                     TranscriptPanel(segment: segment)
@@ -792,6 +1069,9 @@ struct AIRecommendationPanel: View {
                 if !pick.theme.isEmpty {
                     Text(pick.theme)
                         .font(.callout.weight(.semibold))
+                }
+                if let clipTag = model.clipTags(for: pick.relativePath) {
+                    ClipTagSummary(clipTag: clipTag, limit: 8)
                 }
                 Text(pick.text)
                     .font(.callout)
@@ -831,7 +1111,7 @@ struct AIPlanSummary: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 MetricTile(value: "\(model.clipMoments.count)", label: "ranked picks")
                 MetricTile(value: "\(model.highPriorityClipMomentCount)", label: "high hook")
-                MetricTile(value: "\(model.analysisArtifacts.count)", label: "notes")
+                MetricTile(value: "\(model.clipTags.count)", label: "tagged clips")
                 MetricTile(value: "\(model.clipThemes.count - 1)", label: "themes")
             }
         }
@@ -853,7 +1133,7 @@ struct AIPicksPanel: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("Search AI picks", text: Binding(get: { model.clipSearchText }, set: { model.clipSearchText = $0 }))
+                    TextField("Search AI picks and tags", text: Binding(get: { model.clipSearchText }, set: { model.clipSearchText = $0 }))
                         .textFieldStyle(.plain)
                     if !model.clipSearchText.isEmpty {
                         Button {
@@ -874,6 +1154,12 @@ struct AIPicksPanel: View {
                         Text(theme).tag(theme)
                     }
                 }
+
+                Picker("Quality", selection: Binding(get: { model.clipQualityFilter }, set: { model.clipQualityFilter = $0 })) {
+                    ForEach(model.clipQualities, id: \.self) { quality in
+                        Text(quality).tag(quality)
+                    }
+                }
             }
 
             if model.filteredClipMoments.isEmpty {
@@ -885,6 +1171,7 @@ struct AIPicksPanel: View {
                         ClipMomentCard(
                             clipMoment: clipMoment,
                             isSelected: model.selectedClipMomentID == clipMoment.id,
+                            clipTag: model.clipTags(for: clipMoment.relativePath),
                             hookRank: model.hookRank(clipMoment.hookStrength),
                             formatTime: model.formatTime,
                             play: { model.focus(clipMoment, autoplay: true) }
@@ -900,6 +1187,7 @@ struct AIPicksPanel: View {
 struct ClipMomentCard: View {
     var clipMoment: ClipMoment
     var isSelected: Bool
+    var clipTag: ClipTag?
     var hookRank: Int
     var formatTime: (Double) -> String
     var play: () -> Void
@@ -908,6 +1196,9 @@ struct ClipMomentCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
                 HookBadge(rank: hookRank, label: clipMoment.hookStrength)
+                if !clipMoment.quality.isEmpty {
+                    QualityBadge(label: clipMoment.quality)
+                }
                 Text("\(formatTime(clipMoment.start)) - \(formatTime(clipMoment.end))")
                     .font(.caption)
                     .monospacedDigit()
@@ -929,6 +1220,9 @@ struct ClipMomentCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            if let clipTag {
+                ClipTagSummary(clipTag: clipTag, limit: 6)
+            }
             Text(clipMoment.text.isEmpty ? "No transcript text" : clipMoment.text)
                 .font(.callout)
                 .lineLimit(5)
@@ -940,6 +1234,37 @@ struct ClipMomentCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(isSelected ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.12), lineWidth: 1)
+        }
+    }
+}
+
+struct QualityBadge: View {
+    var label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark.seal.fill")
+            Text(label.capitalized)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private var color: Color {
+        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "excellent", "great", "high", "a":
+            .green
+        case "good", "medium", "b":
+            .blue
+        case "weak", "low", "c":
+            .orange
+        case "bad", "poor", "d":
+            .red
+        default:
+            .secondary
         }
     }
 }
@@ -1034,6 +1359,9 @@ struct AIMatchesPanel: View {
                     HStack(alignment: .top, spacing: 9) {
                         HookBadge(rank: model.hookRank(clipMoment.hookStrength), label: clipMoment.hookStrength)
                         VStack(alignment: .leading, spacing: 4) {
+                            if !clipMoment.quality.isEmpty {
+                                QualityBadge(label: clipMoment.quality)
+                            }
                             Text(clipMoment.theme.isEmpty ? "Untitled theme" : clipMoment.theme)
                                 .font(.caption.weight(.semibold))
                                 .lineLimit(1)
@@ -1047,6 +1375,80 @@ struct AIMatchesPanel: View {
             }
             .panelStyle()
         }
+    }
+}
+
+struct ClipTagsPanel: View {
+    var clipTag: ClipTag?
+
+    var body: some View {
+        if let clipTag {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Clip Tags", systemImage: "tag")
+                    .font(.headline)
+                TagGroup(title: "Location", tags: clipTag.locationTags)
+                TagGroup(title: "Language", tags: clipTag.spokenLanguageTags)
+                TagGroup(title: "Entities", tags: clipTag.entityTags)
+                TagGroup(title: "Themes", tags: clipTag.themeTags)
+                TagGroup(title: "Interview language", tags: clipTag.interviewLanguageTags)
+                TagGroup(title: "Quality", tags: clipTag.qualityTags)
+            }
+            .panelStyle()
+        }
+    }
+}
+
+struct TagGroup: View {
+    var title: String
+    var tags: [String]
+
+    var body: some View {
+        if !tags.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TagCloud(tags: tags)
+            }
+        }
+    }
+}
+
+struct ClipTagSummary: View {
+    var clipTag: ClipTag
+    var limit: Int
+
+    var body: some View {
+        let tags = Array(clipTag.displayTags.prefix(limit))
+        if !tags.isEmpty {
+            TagCloud(tags: tags)
+        }
+    }
+}
+
+struct TagCloud: View {
+    var tags: [String]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 6)], alignment: .leading, spacing: 6) {
+            ForEach(tags, id: \.self) { tag in
+                TagChip(label: tag)
+            }
+        }
+    }
+}
+
+struct TagChip: View {
+    var label: String
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(.secondary)
+            .background(Color.secondary.opacity(0.11), in: Capsule())
     }
 }
 
@@ -1156,6 +1558,8 @@ struct StatusBar: View {
             Text("\(model.files.count) files")
             Text("\(model.segments.count) moments")
             Text("\(model.clipMoments.count) AI picks")
+            Text("\(model.clipTags.count) tagged")
+            Text("\(model.people.count) people")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -1211,5 +1615,25 @@ private struct PanelStyle: ViewModifier {
 private extension View {
     func panelStyle() -> some View {
         modifier(PanelStyle())
+    }
+}
+
+private extension ClipTag {
+    var displayTags: [String] {
+        var values: [String] = []
+        appendUnique(locationTags, to: &values)
+        appendUnique(entityTags, to: &values)
+        appendUnique(interviewLanguageTags, to: &values)
+        appendUnique(themeTags, to: &values)
+        appendUnique(spokenLanguageTags, to: &values)
+        appendUnique(qualityTags, to: &values)
+        appendUnique(tags, to: &values)
+        return values
+    }
+
+    private func appendUnique(_ tags: [String], to values: inout [String]) {
+        for tag in tags where !values.contains(tag) {
+            values.append(tag)
+        }
     }
 }

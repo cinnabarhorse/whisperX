@@ -5,20 +5,26 @@ public struct LibrarySnapshot: Equatable, Sendable {
     public var files: [TranscriptFile]
     public var segments: [TranscriptSegment]
     public var clipMoments: [ClipMoment]
+    public var clipTags: [ClipTag]
     public var analysisArtifacts: [AnalysisArtifact]
+    public var people: [PersonProfile]
 
     public init(
         libraryURL: URL,
         files: [TranscriptFile],
         segments: [TranscriptSegment],
         clipMoments: [ClipMoment] = [],
-        analysisArtifacts: [AnalysisArtifact] = []
+        clipTags: [ClipTag] = [],
+        analysisArtifacts: [AnalysisArtifact] = [],
+        people: [PersonProfile] = []
     ) {
         self.libraryURL = libraryURL
         self.files = files
         self.segments = segments
         self.clipMoments = clipMoments
+        self.clipTags = clipTags
         self.analysisArtifacts = analysisArtifacts
+        self.people = people
     }
 
     public var doneFileCount: Int {
@@ -34,6 +40,89 @@ public struct LibrarySnapshot: Equatable, Sendable {
     }
 }
 
+public struct PersonProfile: Identifiable, Hashable, Codable, Sendable {
+    public var id: String
+    public var displayName: String
+    public var tags: [String]
+    public var notes: String
+    public var appearances: [PersonAppearance]
+
+    public init(
+        id: String,
+        displayName: String = "",
+        tags: [String] = [],
+        notes: String = "",
+        appearances: [PersonAppearance] = []
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.tags = tags
+        self.notes = notes
+        self.appearances = appearances
+    }
+
+    public var title: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Person \(id.suffix(6))" : displayName
+    }
+
+    public var videoCount: Int {
+        Set(appearances.map(\.fileID)).count
+    }
+
+    public var appearanceCount: Int {
+        appearances.count
+    }
+
+    public var fileIDs: Set<String> {
+        Set(appearances.map(\.fileID))
+    }
+}
+
+public struct PersonAppearance: Identifiable, Hashable, Codable, Sendable {
+    public var id: String
+    public var personID: String
+    public var fileID: String
+    public var relativePath: String
+    public var sourceURL: URL?
+    public var timestamp: Double
+    public var boundingBox: FaceBoundingBox
+    public var signature: String
+
+    public init(
+        id: String,
+        personID: String,
+        fileID: String,
+        relativePath: String,
+        sourceURL: URL?,
+        timestamp: Double,
+        boundingBox: FaceBoundingBox,
+        signature: String
+    ) {
+        self.id = id
+        self.personID = personID
+        self.fileID = fileID
+        self.relativePath = relativePath
+        self.sourceURL = sourceURL
+        self.timestamp = timestamp
+        self.boundingBox = boundingBox
+        self.signature = signature
+    }
+}
+
+public struct FaceBoundingBox: Hashable, Codable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
 public struct ClipMoment: Identifiable, Hashable, Codable, Sendable {
     public var id: String
     public var relativePath: String
@@ -42,6 +131,7 @@ public struct ClipMoment: Identifiable, Hashable, Codable, Sendable {
     public var end: Double
     public var theme: String
     public var hookStrength: String
+    public var quality: String
     public var speaker: String?
     public var text: String
 
@@ -53,6 +143,7 @@ public struct ClipMoment: Identifiable, Hashable, Codable, Sendable {
         end: Double,
         theme: String,
         hookStrength: String,
+        quality: String,
         speaker: String?,
         text: String
     ) {
@@ -63,8 +154,43 @@ public struct ClipMoment: Identifiable, Hashable, Codable, Sendable {
         self.end = end
         self.theme = theme
         self.hookStrength = hookStrength
+        self.quality = quality
         self.speaker = speaker
         self.text = text
+    }
+}
+
+public struct ClipTag: Identifiable, Hashable, Codable, Sendable {
+    public var id: String
+    public var relativePath: String
+    public var locationTags: [String]
+    public var spokenLanguageTags: [String]
+    public var themeTags: [String]
+    public var entityTags: [String]
+    public var interviewLanguageTags: [String]
+    public var qualityTags: [String]
+    public var tags: [String]
+
+    public init(
+        id: String,
+        relativePath: String,
+        locationTags: [String] = [],
+        spokenLanguageTags: [String] = [],
+        themeTags: [String] = [],
+        entityTags: [String] = [],
+        interviewLanguageTags: [String] = [],
+        qualityTags: [String] = [],
+        tags: [String] = []
+    ) {
+        self.id = id
+        self.relativePath = relativePath
+        self.locationTags = locationTags
+        self.spokenLanguageTags = spokenLanguageTags
+        self.themeTags = themeTags
+        self.entityTags = entityTags
+        self.interviewLanguageTags = interviewLanguageTags
+        self.qualityTags = qualityTags
+        self.tags = tags
     }
 }
 
