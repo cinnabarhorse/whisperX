@@ -77,6 +77,8 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
         reviewMenu.addItem(.separator())
         reviewMenu.addItem(withTitle: "Play/Pause", action: #selector(togglePlayback), keyEquivalent: " ")
         reviewMenu.addItem(withTitle: "Copy Current AI Pick CSV", action: #selector(copyAIPickCSV), keyEquivalent: "c")
+        reviewMenu.addItem(withTitle: "Copy Transcript Text", action: #selector(copyTranscriptText), keyEquivalent: "t")
+        reviewMenu.addItem(withTitle: "Copy Source Path", action: #selector(copySourcePath), keyEquivalent: "y")
         reviewItem.submenu = reviewMenu
         mainMenu.addItem(reviewItem)
 
@@ -129,6 +131,14 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
 
     @objc func copyAIPickCSV() {
         model?.copyCurrentAIPickCSV()
+    }
+
+    @objc func copyTranscriptText() {
+        model?.copyCurrentTranscriptText()
+    }
+
+    @objc func copySourcePath() {
+        model?.copyCurrentSourcePath()
     }
 
     @objc func togglePlayback() {

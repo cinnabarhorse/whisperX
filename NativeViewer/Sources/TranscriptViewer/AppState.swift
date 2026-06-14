@@ -444,6 +444,28 @@ final class LibraryViewModel {
         statusMessage = "Copied AI pick CSV row"
     }
 
+    func copyCurrentTranscriptText() {
+        guard let segment = selectedSegment else {
+            statusMessage = "No transcript moment selected"
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(segment.text, forType: .string)
+        statusMessage = "Copied transcript text"
+    }
+
+    func copyCurrentSourcePath() {
+        guard let segment = selectedSegment else {
+            statusMessage = "No transcript moment selected"
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(segment.sourceURL.path, forType: .string)
+        statusMessage = "Copied source video path"
+    }
+
     func exportAIPickQueueCSV() {
         guard let libraryURL else { return }
         let url = libraryURL.appendingPathComponent("viewer-ai-picks.csv")

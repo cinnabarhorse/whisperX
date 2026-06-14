@@ -508,6 +508,20 @@ struct CurrentAIPickStrip: View {
                     .labelStyle(.iconOnly)
                     .help("Copy current AI pick as CSV")
                     Button {
+                        model.copyCurrentTranscriptText()
+                    } label: {
+                        Label("Copy Transcript", systemImage: "text.quote")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Copy transcript text")
+                    Button {
+                        model.copyCurrentSourcePath()
+                    } label: {
+                        Label("Copy Source Path", systemImage: "link")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Copy source video path")
+                    Button {
                         model.exportAIPickQueueCSV()
                     } label: {
                         Label("Export AI Queue", systemImage: "square.and.arrow.down")
@@ -1162,14 +1176,18 @@ struct ShortcutLayer: View {
                 .keyboardShortcut("b", modifiers: [])
             Button("AI Plan") { model.inspectorMode = .aiPlan }
                 .keyboardShortcut("a", modifiers: [])
-            Button("Copy AI Pick CSV") { model.copyCurrentAIPickCSV() }
-                .keyboardShortcut("c", modifiers: [])
-            Button("Export AI Queue") { model.exportAIPickQueueCSV() }
-                .keyboardShortcut("e", modifiers: [])
             Button("Previous AI Pick") { model.focusPreviousAIPick() }
                 .keyboardShortcut(.upArrow, modifiers: [])
             Button("Next AI Pick") { model.focusNextAIPick() }
                 .keyboardShortcut(.downArrow, modifiers: [])
+            Button("Previous AI Pick Alias") { model.focusPreviousAIPick() }
+                .keyboardShortcut("k", modifiers: [])
+            Button("Next AI Pick Alias") { model.focusNextAIPick() }
+                .keyboardShortcut("j", modifiers: [])
+            Button("Back 2 Seconds") { model.nudgePlayback(seconds: -2) }
+                .keyboardShortcut(.leftArrow, modifiers: [])
+            Button("Forward 2 Seconds") { model.nudgePlayback(seconds: 2) }
+                .keyboardShortcut(.rightArrow, modifiers: [])
         }
         .frame(width: 0, height: 0)
         .opacity(0.01)
