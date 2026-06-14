@@ -286,8 +286,13 @@ public struct LibraryStore: Sendable {
     }
 
     private func loadPeople(libraryURL: URL, files: [TranscriptFile]) throws -> [PersonProfile] {
-        let consolidation = PersonAppearanceConsolidator()
-            .consolidateWithRemapping(try loadPersonAppearances(libraryURL: libraryURL, files: files))
+        let loadedAppearances = try loadPersonAppearances(libraryURL: libraryURL, files: files)
+        let consolidation = loadedAppearances.contains { Self.isPreclusteredFaceSignature($0.signature) }
+            ? PersonAppearanceConsolidationResult(
+                appearances: loadedAppearances,
+                personIDByOriginalID: Dictionary(uniqueKeysWithValues: Set(loadedAppearances.map(\.personID)).map { ($0, $0) })
+            )
+            : PersonAppearanceConsolidator().consolidateWithRemapping(loadedAppearances)
         let appearances = consolidation.appearances
         let tags = mergedPersonTags(
             try loadPersonTags(libraryURL: libraryURL),
@@ -315,6 +320,12 @@ public struct LibraryStore: Sendable {
             }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
+    }
+
+    private static func isPreclusteredFaceSignature(_ signature: String) -> Bool {
+        signature.hasPrefix("visionfp:")
+            || signature.hasPrefix("insightface:")
+            || signature.hasPrefix("sface:")
     }
 
     private func loadPersonAppearances(libraryURL: URL, files: [TranscriptFile]) throws -> [PersonAppearance] {

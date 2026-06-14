@@ -76,30 +76,43 @@ public struct PersonAppearanceConsolidator: Sendable {
         return (best.left, best.right)
     }
 
-    private static func signatureValues(from signature: String) -> [Double]? {
+    private static func signatureValues(from signature: String) -> [Float]? {
+        if signature.hasPrefix("visionfp:") {
+            let parts = signature.split(separator: ":", maxSplits: 2).map(String.init)
+            guard parts.count == 3, let data = Data(base64Encoded: parts[2]) else {
+                return nil
+            }
+            return data.withUnsafeBytes { rawBuffer -> [Float]? in
+                guard rawBuffer.count % MemoryLayout<Float>.stride == 0 else {
+                    return nil
+                }
+                return Array(rawBuffer.bindMemory(to: Float.self))
+            }
+        }
+
         let components = signature
             .split(separator: ";")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let values = components.compactMap(Double.init)
+        let values = components.compactMap(Float.init)
         guard values.count == components.count else { return nil }
         return values.isEmpty ? nil : values
     }
 
-    private static func rootMeanSquareDistance(_ lhs: [Double], _ rhs: [Double]) -> Double {
+    private static func rootMeanSquareDistance(_ lhs: [Float], _ rhs: [Float]) -> Double {
         guard lhs.count == rhs.count, !lhs.isEmpty else { return .greatestFiniteMagnitude }
-        let squared = zip(lhs, rhs).map { pow($0 - $1, 2) }.reduce(0, +)
+        let squared = zip(lhs, rhs).map { pow(Double($0 - $1), 2) }.reduce(0, +)
         return sqrt(squared / Double(lhs.count))
     }
 }
 
 private struct SignatureCluster {
     var id: String
-    var centroid: [Double] = []
+    var centroid: [Float] = []
     var signatureCount = 0
     var appearanceCount = 0
     var memberIDs: Set<String> = []
 
-    mutating func add(_ signature: [Double]) {
+    mutating func add(_ signature: [Float]) {
         guard centroid.isEmpty || centroid.count == signature.count else { return }
         memberIDs.insert(id)
         appearanceCount += 1
@@ -107,7 +120,7 @@ private struct SignatureCluster {
         if centroid.isEmpty {
             centroid = signature
         } else {
-            centroid = zip(centroid, signature).map { (($0 * Double(signatureCount)) + $1) / Double(nextCount) }
+            centroid = zip(centroid, signature).map { (($0 * Float(signatureCount)) + $1) / Float(nextCount) }
         }
         signatureCount = nextCount
     }
@@ -115,7 +128,7 @@ private struct SignatureCluster {
     func merged(with other: SignatureCluster) -> SignatureCluster {
         let totalSignatures = signatureCount + other.signatureCount
         let mergedCentroid = zip(centroid, other.centroid).map {
-            (($0 * Double(signatureCount)) + ($1 * Double(other.signatureCount))) / Double(totalSignatures)
+            (($0 * Float(signatureCount)) + ($1 * Float(other.signatureCount))) / Float(totalSignatures)
         }
         return SignatureCluster(
             id: preferredID(over: other),
