@@ -122,6 +122,36 @@ struct LibraryStoreTests {
         #expect(Set(people.first?.appearances.map(\.personID) ?? []) == ["person_abc123"])
     }
 
+    @Test("loads model-clustered people index without legacy consolidation")
+    func loadsModelClusteredPeopleIndexWithoutConsolidating() throws {
+        let fixture = try Fixture()
+        let peopleRows = [
+            [
+                "person_id",
+                "appearance_id",
+                "file",
+                "file_id",
+                "timestamp",
+                "bbox_x",
+                "bbox_y",
+                "bbox_width",
+                "bbox_height",
+                "signature"
+            ],
+            ["person_model_a", "appearance_1", "Day 1/C0001.MP4", "", "5.500", "0.2", "0.2", "0.3", "0.3", "insightface:v1:0.1000000,0.2000000,0.3000000"],
+            ["person_model_b", "appearance_2", "Day 1/C0001.MP4", "", "6.500", "0.2", "0.2", "0.3", "0.3", "insightface:v1:0.1100000,0.1900000,0.3100000"]
+        ]
+        try CSV.encode(rows: peopleRows)
+            .write(to: fixture.libraryURL.appendingPathComponent("people_index.csv"), atomically: true, encoding: .utf8)
+        try CSV.encode(rows: [["person_id", "display_name", "tags", "notes", "updated_at"]])
+            .write(to: fixture.libraryURL.appendingPathComponent("people_tags.csv"), atomically: true, encoding: .utf8)
+
+        let people = try LibraryStore().load(libraryURL: fixture.libraryURL).people
+
+        #expect(Set(people.map(\.id)) == ["person_model_a", "person_model_b"])
+        #expect(people.flatMap(\.appearances).count == 2)
+    }
+
     @Test("CSV parser handles quoted commas and escaped quotes")
     func parsesQuotedCSV() {
         let rows = CSV.parse("a,b,c\none,\"two, still two\",\"quote \"\"inside\"\"\"\n")
