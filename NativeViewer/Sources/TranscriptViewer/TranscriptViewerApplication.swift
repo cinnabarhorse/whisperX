@@ -19,7 +19,7 @@ final class TranscriptViewerApplication: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let initialPath = CommandLine.arguments.dropFirst().first
+        let initialPath = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-psn_") }
         let model = LibraryViewModel(initialPath: initialPath)
         self.model = model
 
