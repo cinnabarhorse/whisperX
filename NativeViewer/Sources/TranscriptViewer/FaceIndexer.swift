@@ -1,5 +1,4 @@
 import AVFoundation
-import AppKit
 import Foundation
 import TranscriptViewerCore
 import Vision
@@ -7,7 +6,7 @@ import Vision
 struct FaceIndexer: Sendable {
     var sampleInterval: Double = 5
     var maximumFramesPerFile: Int = 180
-    var clusterThreshold: Double = 0.18
+    var clusterThreshold: Double = 0.0248
 
     func scan(files: [TranscriptFile]) async throws -> [PersonAppearance] {
         try await Task.detached(priority: .userInitiated) {
@@ -35,7 +34,7 @@ struct FaceIndexer: Sendable {
                 }
                 let detections = try detectFaces(in: image)
                 for detection in detections {
-                    guard let signature = signature(for: detection.boundingBox, in: image) else {
+                    guard let signature = try featurePrintSignature(for: detection.boundingBox, in: image) else {
                         continue
                     }
                     let personID: String
@@ -85,7 +84,7 @@ struct FaceIndexer: Sendable {
         return request.results ?? []
     }
 
-    private func signature(for boundingBox: CGRect, in image: CGImage) -> FaceSignature? {
+    private func featurePrintSignature(for boundingBox: CGRect, in image: CGImage) throws -> FaceSignature? {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
         let cropRect = CGRect(
@@ -98,22 +97,24 @@ struct FaceIndexer: Sendable {
             return nil
         }
 
-        let bitmap = NSBitmapImageRep(cgImage: crop)
-        let grid = 12
-        var values: [Double] = []
-        values.reserveCapacity(grid * grid)
-        for row in 0..<grid {
-            for column in 0..<grid {
-                let x = min(bitmap.pixelsWide - 1, max(0, Int((Double(column) + 0.5) * Double(bitmap.pixelsWide) / Double(grid))))
-                let y = min(bitmap.pixelsHigh - 1, max(0, Int((Double(row) + 0.5) * Double(bitmap.pixelsHigh) / Double(grid))))
-                let color = bitmap.colorAt(x: x, y: y) ?? .black
-                values.append((0.299 * color.redComponent) + (0.587 * color.greenComponent) + (0.114 * color.blueComponent))
-            }
+        let request = VNGenerateImageFeaturePrintRequest()
+        if #available(macOS 14.0, *) {
+            request.revision = VNGenerateImageFeaturePrintRequestRevision2
         }
-        let average = values.reduce(0, +) / Double(values.count)
-        let normalized = values.map { min(1, max(0, ($0 - average) + 0.5)) }
-        let encoded = normalized.map { String(format: "%.3f", $0) }.joined(separator: ";")
-        return FaceSignature(values: normalized, encoded: encoded)
+        request.imageCropAndScaleOption = .scaleFit
+        let handler = VNImageRequestHandler(cgImage: crop, options: [:])
+        try handler.perform([request])
+        guard let observation = request.results?.first else {
+            return nil
+        }
+
+        let values = observation.data.withUnsafeBytes { rawBuffer -> [Float] in
+            Array(rawBuffer.bindMemory(to: Float.self))
+        }
+        guard !values.isEmpty else { return nil }
+
+        let encoded = "visionfp:v\(observation.requestRevision):\(observation.data.base64EncodedString())"
+        return FaceSignature(values: values, encoded: encoded)
     }
 
     private func stableID(_ parts: Any...) -> String {
@@ -131,24 +132,24 @@ struct FaceIndexer: Sendable {
 }
 
 private struct FaceSignature {
-    var values: [Double]
+    var values: [Float]
     var encoded: String
 }
 
 private struct FaceCluster {
     var id: String
-    var centroid: [Double]
+    var centroid: [Float]
     var count = 1
 
-    mutating func add(_ signature: [Double]) {
+    mutating func add(_ signature: [Float]) {
         let nextCount = count + 1
-        centroid = zip(centroid, signature).map { (($0 * Double(count)) + $1) / Double(nextCount) }
+        centroid = zip(centroid, signature).map { (($0 * Float(count)) + $1) / Float(nextCount) }
         count = nextCount
     }
 }
 
 private extension Array where Element == FaceCluster {
-    func bestMatch(for signature: [Double], threshold: Double) -> Int? {
+    func bestMatch(for signature: [Float], threshold: Double) -> Int? {
         enumerated()
             .map { index, cluster in (index, rootMeanSquareDistance(signature, cluster.centroid)) }
             .filter { $0.1 <= threshold }
@@ -156,9 +157,9 @@ private extension Array where Element == FaceCluster {
             .0
     }
 
-    private func rootMeanSquareDistance(_ lhs: [Double], _ rhs: [Double]) -> Double {
+    private func rootMeanSquareDistance(_ lhs: [Float], _ rhs: [Float]) -> Double {
         guard lhs.count == rhs.count, !lhs.isEmpty else { return .greatestFiniteMagnitude }
-        let squared = zip(lhs, rhs).map { pow($0 - $1, 2) }.reduce(0, +)
+        let squared = zip(lhs, rhs).map { pow(Double($0 - $1), 2) }.reduce(0, +)
         return sqrt(squared / Double(lhs.count))
     }
 }
