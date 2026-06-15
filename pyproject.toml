@@ -31,7 +31,6 @@ dev = ["pytest"]
 
 [project.scripts]
 whisperx = "whisperx.__main__:cli"
-whisperx-viewer = "whisperx.viewer:main"
 
 [build-system]
 requires = ["setuptools"]
