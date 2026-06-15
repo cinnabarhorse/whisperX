@@ -10,10 +10,21 @@ struct RootView: View {
         ZStack {
             NavigationSplitView {
                 SidebarView(model: model)
-                    .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 420)
+                    .navigationSplitViewColumnWidth(
+                        min: model.isSidebarCollapsed ? 72 : 280,
+                        ideal: model.isSidebarCollapsed ? 78 : 330,
+                        max: model.isSidebarCollapsed ? 86 : 420
+                    )
             } content: {
-                ReviewConsoleView(model: model)
-                    .navigationSplitViewColumnWidth(min: 650, ideal: 820)
+                Group {
+                    switch model.libraryMode {
+                    case .review:
+                        ReviewConsoleView(model: model)
+                    case .tags:
+                        TagCloudTabView(model: model)
+                    }
+                }
+                .navigationSplitViewColumnWidth(min: 650, ideal: 820)
             } detail: {
                 InspectorView(model: model)
                     .navigationSplitViewColumnWidth(min: 340, ideal: 390, max: 470)
@@ -57,6 +68,12 @@ struct RootView: View {
                     Label("Export AI Queue", systemImage: "square.and.arrow.down")
                 }
                 .disabled(model.filteredClipMoments.isEmpty)
+                Button {
+                    model.showTagCloud()
+                } label: {
+                    Label("Tags", systemImage: "tag")
+                }
+                .disabled(model.clipTags.isEmpty)
                 Button {
                     model.scanPeople()
                 } label: {
@@ -139,15 +156,221 @@ struct WelcomeOverlay: View {
 }
 
 struct SidebarView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let model: LibraryViewModel
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SidebarRail(
+                selectedTab: model.sidebarTab,
+                isCollapsed: model.isSidebarCollapsed,
+                tabSelected: selectTab,
+                toggleCollapsed: toggleCollapsed
+            )
+
+            if !model.isSidebarCollapsed {
+                Divider()
+                SidebarPanel(model: model)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .frame(minWidth: model.isSidebarCollapsed ? 68 : 280)
+        .background(.bar)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: model.isSidebarCollapsed)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.18), value: model.sidebarTab)
+    }
+
+    private func selectTab(_ tab: LibraryViewModel.SidebarTab) {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.18)) {
+            model.sidebarTab = tab
+        }
+    }
+
+    private func toggleCollapsed() {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
+            model.isSidebarCollapsed.toggle()
+        }
+    }
+}
+
+struct SidebarRail: View {
+    var selectedTab: LibraryViewModel.SidebarTab
+    var isCollapsed: Bool
+    var tabSelected: (LibraryViewModel.SidebarTab) -> Void
+    var toggleCollapsed: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "waveform.and.magnifyingglass")
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: 44, height: 44)
+                .padding(.top, 10)
+
+            VStack(spacing: 6) {
+                ForEach(LibraryViewModel.SidebarTab.allCases) { tab in
+                    Button {
+                        tabSelected(tab)
+                    } label: {
+                        Image(systemName: tab.systemImage)
+                            .font(.system(size: 16, weight: .semibold))
+                            .symbolRenderingMode(.hierarchical)
+                            .frame(width: 42, height: 36)
+                            .contentTransition(.symbolEffect(.replace.downUp))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
+                    .background(selectedTab == tab ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .help(tab.title)
+                    .accessibilityLabel(tab.title)
+                }
+            }
+
+            Spacer()
+
+            Button(action: toggleCollapsed) {
+                Image(systemName: isCollapsed ? "sidebar.leading" : "sidebar.left")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 42, height: 34)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+            .accessibilityLabel(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
+            .padding(.bottom, 10)
+        }
+        .frame(width: 68)
+    }
+}
+
+struct SidebarPanel: View {
     let model: LibraryViewModel
 
     var body: some View {
         VStack(spacing: 0) {
-            LibraryHeader(model: model)
+            SidebarPanelHeader(tab: model.sidebarTab)
             Divider()
+            switch model.sidebarTab {
+            case .overview:
+                SidebarOverviewPanel(model: model)
+            case .files:
+                SidebarFilesPanel(model: model)
+            case .people:
+                SidebarPeoplePanel(model: model)
+            case .tags:
+                SidebarTagsPanel(model: model)
+            }
+        }
+        .frame(minWidth: 212)
+    }
+}
+
+struct SidebarPanelHeader: View {
+    var tab: LibraryViewModel.SidebarTab
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: tab.systemImage)
+                .foregroundStyle(.tint)
+                .frame(width: 20)
+            Text(tab.title)
+                .font(.headline)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+struct SidebarOverviewPanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                LibraryHeader(model: model)
+                Divider()
+                SidebarQuickActions(model: model)
+                Divider()
+                SidebarReviewQueues(model: model)
+            }
+        }
+    }
+}
+
+struct SidebarQuickActions: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Actions")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            QueueRow(
+                title: "AI Review",
+                subtitle: "\(model.clipFilterSummary)",
+                systemImage: "sparkles",
+                isSelected: model.inspectorMode == .aiPlan
+            ) {
+                model.startAIAssistedReview()
+            }
+            .disabled(model.clipMoments.isEmpty)
+            QueueRow(
+                title: "High Hooks",
+                subtitle: "\(model.highPriorityClipMomentCount) priority picks",
+                systemImage: "flame",
+                isSelected: false
+            ) {
+                model.focusHighHookAIPick()
+            }
+            .disabled(model.highPriorityClipMomentCount == 0)
+            QueueRow(
+                title: model.isScanningPeople ? "Scanning people" : "Scan video faces",
+                subtitle: "Local Vision model",
+                systemImage: model.isScanningPeople ? "hourglass" : "viewfinder",
+                isSelected: model.isScanningPeople
+            ) {
+                model.scanPeople()
+            }
+            .disabled(model.isScanningPeople)
+        }
+        .padding(14)
+    }
+}
+
+struct SidebarReviewQueues: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Queues")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(LibraryViewModel.SegmentScope.allCases) { scope in
+                QueueRow(
+                    title: scope.title,
+                    subtitle: "\(model.count(for: scope)) moments",
+                    systemImage: scope.systemImage,
+                    isSelected: model.libraryMode == .review && model.segmentScope == scope
+                ) {
+                    model.libraryMode = .review
+                    model.setScope(scope)
+                }
+            }
+        }
+        .padding(14)
+    }
+}
+
+struct SidebarFilesPanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
             FileSearchField(model: model)
-            Divider()
-            PersonSearchField(model: model)
             Divider()
             List {
                 Section("Queues") {
@@ -171,47 +394,67 @@ struct SidebarView: View {
                         title: "All transcripts",
                         subtitle: "\(model.segments.count) moments",
                         systemImage: "rectangle.stack",
-                        isSelected: model.selectedFileID == nil && model.segmentScope == .all
+                        isSelected: model.libraryMode == .review
+                            && model.selectedFileID == nil
+                            && model.selectedPersonID == nil
+                            && model.segmentScope == .all
                     ) {
+                        model.segmentScope = .all
                         model.clearFileSelection()
                         model.setScope(.all)
                     }
                 }
+                Section("Files") {
+                    if model.filteredFiles.isEmpty {
+                        Text(model.files.isEmpty ? "No files loaded" : "No matching files")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.filteredFiles) { file in
+                            FileRow(
+                                file: file,
+                                clipTag: model.clipTags(for: file.relativePath),
+                                isSelected: model.selectedFileID == file.id
+                            ) {
+                                model.choose(file: file)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+        }
+    }
+}
+
+struct SidebarPeoplePanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PersonSearchField(model: model)
+            Divider()
+            List {
                 Section {
                     QueueRow(
                         title: "All people",
                         subtitle: "\(model.people.count) people",
                         systemImage: "person.2",
-                        isSelected: model.selectedPersonID == nil
+                        isSelected: model.libraryMode == .review
+                            && model.selectedPersonID == nil
+                            && model.selectedFileID == nil
+                            && model.segmentScope == .people
                     ) {
+                        model.segmentScope = .people
                         model.clearPersonSelection()
                     }
-                    Button {
+                    QueueRow(
+                        title: model.isScanningPeople ? "Scanning people" : "Scan video faces",
+                        subtitle: "Local Vision model",
+                        systemImage: model.isScanningPeople ? "hourglass" : "viewfinder",
+                        isSelected: model.isScanningPeople
+                    ) {
                         model.scanPeople()
-                    } label: {
-                        HStack(spacing: 10) {
-                            if model.isScanningPeople {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .frame(width: 20)
-                            } else {
-                                Image(systemName: "viewfinder")
-                                    .foregroundStyle(.tint)
-                                    .frame(width: 20)
-                            }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(model.isScanningPeople ? "Scanning people" : "Scan video faces")
-                                    .font(.callout.weight(.medium))
-                                Text("Local Vision model")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 7)
                     }
-                    .buttonStyle(.plain)
                     .disabled(model.isScanningPeople)
                 }
                 Section("People") {
@@ -224,23 +467,12 @@ struct SidebarView: View {
                                 person: person,
                                 isSelected: model.selectedPersonID == person.id,
                                 action: {
-                                model.choose(person: person)
+                                    model.choose(person: person)
                                 },
                                 renameAction: {
                                     model.beginRenaming(person: person)
                                 }
                             )
-                        }
-                    }
-                }
-                Section("Files") {
-                    ForEach(model.filteredFiles) { file in
-                        FileRow(
-                            file: file,
-                            clipTag: model.clipTags(for: file.relativePath),
-                            isSelected: model.selectedFileID == file.id
-                        ) {
-                            model.choose(file: file)
                         }
                     }
                 }
@@ -250,6 +482,98 @@ struct SidebarView: View {
         .sheet(item: Binding(get: { model.personBeingRenamed }, set: { model.personBeingRenamed = $0 })) { person in
             RenamePersonSheet(model: model, person: person)
         }
+    }
+}
+
+struct SidebarTagsPanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TagSearchField(model: model)
+            Divider()
+            List {
+                Section {
+                    QueueRow(
+                        title: "Tag Cloud",
+                        subtitle: "\(model.tagSummaries.count) tags",
+                        systemImage: "tag",
+                        isSelected: model.libraryMode == .tags && model.selectedTagFilter == nil
+                    ) {
+                        model.showTagCloud()
+                    }
+                }
+                Section("Tags") {
+                    if model.filteredTagSummaries.isEmpty {
+                        Text(model.tagSummaries.isEmpty ? "No tags loaded" : "No matching tags")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.filteredTagSummaries) { tag in
+                            TagSidebarRow(
+                                tag: tag,
+                                isSelected: model.selectedTagFilter == tag.label
+                            ) {
+                                model.selectTag(tag)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+        }
+    }
+}
+
+struct TagSearchField: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Filter tags", text: Binding(get: { model.tagSearchText }, set: { model.tagSearchText = $0 }))
+                .textFieldStyle(.plain)
+            if !model.tagSearchText.isEmpty {
+                Button {
+                    model.tagSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
+}
+
+struct TagSidebarRow: View {
+    var tag: LibraryViewModel.TagSummary
+    var isSelected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "tag")
+                    .foregroundStyle(.tint)
+                    .frame(width: 20)
+                Text(tag.label)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(tag.clipCount)")
+                    .font(.caption2.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 7)
+            .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -654,6 +978,222 @@ struct ReviewConsoleView: View {
             SegmentList(model: model)
         }
         .navigationTitle("Review")
+    }
+}
+
+struct TagCloudTabView: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TagCloudHeader(model: model)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    TagCloudPanel(model: model)
+                    TaggedVideosPanel(model: model)
+                }
+                .padding(16)
+            }
+        }
+        .navigationTitle("Tags")
+    }
+}
+
+struct TagCloudHeader: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.selectedTagFilterLabel)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(model.tagSummaries.count) tags across \(model.clipTags.count) tagged clips")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.selectedTagFilter != nil {
+                Button {
+                    model.clearTagFilter()
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+            }
+            Button {
+                model.libraryMode = .review
+            } label: {
+                Label("Review", systemImage: "play.rectangle")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+}
+
+struct TagCloudPanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Tag Cloud", systemImage: "tag")
+                    .font(.headline)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search tags", text: Binding(get: { model.tagSearchText }, set: { model.tagSearchText = $0 }))
+                    .textFieldStyle(.plain)
+                if !model.tagSearchText.isEmpty {
+                    Button {
+                        model.tagSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+
+            if model.filteredTagSummaries.isEmpty {
+                ContentUnavailableView("No tags", systemImage: "tag.slash")
+                    .frame(maxWidth: .infinity, minHeight: 140)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(model.filteredTagSummaries) { tag in
+                        TagSummaryButton(
+                            tag: tag,
+                            isSelected: model.selectedTagFilter == tag.label
+                        ) {
+                            model.selectTag(tag)
+                        }
+                    }
+                }
+            }
+        }
+        .panelStyle()
+    }
+}
+
+struct TagSummaryButton: View {
+    var tag: LibraryViewModel.TagSummary
+    var isSelected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(tag.label)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text("\(tag.clipCount)")
+                    .font(.caption2.weight(.bold))
+                    .monospacedDigit()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(isSelected ? Color.white.opacity(0.22) : Color.secondary.opacity(0.14), in: Capsule())
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(isSelected ? .white : .primary)
+            .background(isSelected ? Color.accentColor : Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.14), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+}
+
+struct TaggedVideosPanel: View {
+    let model: LibraryViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(videoCountLabel, systemImage: "film.stack")
+                    .font(.headline)
+                Spacer()
+            }
+            if model.selectedTagClipTags.isEmpty {
+                ContentUnavailableView("No tagged videos", systemImage: "film.stack")
+                    .frame(maxWidth: .infinity, minHeight: 140)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(model.selectedTagClipTags) { clipTag in
+                        TaggedVideoCard(
+                            clipTag: clipTag,
+                            file: model.files.first { $0.relativePath == clipTag.relativePath }
+                        ) { file in
+                            model.choose(file: file)
+                        }
+                    }
+                }
+            }
+        }
+        .panelStyle()
+    }
+
+    private var videoCountLabel: String {
+        let count = model.selectedTagClipTags.count
+        let noun = count == 1 ? "clip" : "clips"
+        if model.selectedTagFilter == nil {
+            return "\(count) tagged \(noun)"
+        }
+        return "\(count) \(noun) tagged \(model.selectedTagFilterLabel)"
+    }
+}
+
+struct TaggedVideoCard: View {
+    var clipTag: ClipTag
+    var file: TranscriptFile?
+    var open: (TranscriptFile?) -> Void
+
+    var body: some View {
+        Button {
+            open(file)
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "film")
+                        .foregroundStyle(.tint)
+                    Text(clipTag.relativePath)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    if let file {
+                        Text("\(file.segmentCount) moments")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if !clipTag.displayTags.isEmpty {
+                    TagCloud(tags: Array(clipTag.displayTags.prefix(10)))
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
     }
 }
 
@@ -1786,25 +2326,5 @@ private struct PanelStyle: ViewModifier {
 private extension View {
     func panelStyle() -> some View {
         modifier(PanelStyle())
-    }
-}
-
-private extension ClipTag {
-    var displayTags: [String] {
-        var values: [String] = []
-        appendUnique(locationTags, to: &values)
-        appendUnique(entityTags, to: &values)
-        appendUnique(interviewLanguageTags, to: &values)
-        appendUnique(themeTags, to: &values)
-        appendUnique(spokenLanguageTags, to: &values)
-        appendUnique(qualityTags, to: &values)
-        appendUnique(tags, to: &values)
-        return values
-    }
-
-    private func appendUnique(_ tags: [String], to values: inout [String]) {
-        for tag in tags where !values.contains(tag) {
-            values.append(tag)
-        }
     }
 }

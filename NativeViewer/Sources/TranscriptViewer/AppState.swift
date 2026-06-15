@@ -56,6 +56,46 @@ final class LibraryViewModel {
         }
     }
 
+    enum LibraryMode: String, CaseIterable, Identifiable {
+        case review
+        case tags
+
+        var id: String { rawValue }
+    }
+
+    enum SidebarTab: String, CaseIterable, Identifiable {
+        case overview
+        case files
+        case people
+        case tags
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .overview: "Overview"
+            case .files: "Files"
+            case .people: "People"
+            case .tags: "Tags"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .overview: "rectangle.grid.2x2"
+            case .files: "film.stack"
+            case .people: "person.2"
+            case .tags: "tag"
+            }
+        }
+    }
+
+    struct TagSummary: Identifiable, Hashable {
+        var id: String
+        var label: String
+        var clipCount: Int
+    }
+
     @ObservationIgnored private let store = LibraryStore()
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored var player = AVPlayer()
@@ -77,11 +117,16 @@ final class LibraryViewModel {
     var selectedClipMomentID: String?
     var selectedAnalysisArtifactID: String?
     var selectedPersonID: String?
+    var selectedTagFilter: String?
     var fileSearchText = ""
     var personSearchText = ""
+    var tagSearchText = ""
     var searchText = ""
     var segmentScope: SegmentScope = .all
     var inspectorMode: InspectorMode = .moment
+    var libraryMode: LibraryMode = .review
+    var sidebarTab: SidebarTab = .overview
+    var isSidebarCollapsed = false
     var isLoading = false
     var isScanningPeople = false
     var statusMessage = "Open a WhisperX _ai_library folder."
@@ -158,8 +203,9 @@ final class LibraryViewModel {
 
     var filteredFiles: [TranscriptFile] {
         let query = fileSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return files }
-        return files.filter {
+        let byTag = files.filter { matchesSelectedTag(relativePath: $0.relativePath) }
+        guard !query.isEmpty else { return byTag }
+        return byTag.filter {
             $0.relativePath.localizedCaseInsensitiveContains(query)
                 || $0.status.localizedCaseInsensitiveContains(query)
                 || ($0.language?.localizedCaseInsensitiveContains(query) ?? false)
@@ -176,6 +222,52 @@ final class LibraryViewModel {
                 || person.tags.joined(separator: " ").localizedCaseInsensitiveContains(query)
                 || person.notes.localizedCaseInsensitiveContains(query)
                 || person.appearances.contains { $0.relativePath.localizedCaseInsensitiveContains(query) }
+            }
+    }
+
+    var tagSummaries: [TagSummary] {
+        var labels: [String: String] = [:]
+        var counts: [String: Int] = [:]
+
+        for clipTag in clipTags {
+            var clipKeys = Set<String>()
+            for tag in clipTag.displayTags {
+                let label = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !label.isEmpty else { continue }
+                let key = tagKey(label)
+                labels[key] = labels[key] ?? label
+                clipKeys.insert(key)
+            }
+            for key in clipKeys {
+                counts[key, default: 0] += 1
+            }
+        }
+
+        return counts.map { key, count in
+            TagSummary(id: key, label: labels[key] ?? key, clipCount: count)
+        }
+        .sorted { lhs, rhs in
+            if lhs.clipCount != rhs.clipCount {
+                return lhs.clipCount > rhs.clipCount
+            }
+            return lhs.label.localizedStandardCompare(rhs.label) == .orderedAscending
+        }
+    }
+
+    var filteredTagSummaries: [TagSummary] {
+        let query = tagSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return tagSummaries }
+        return tagSummaries.filter { $0.label.localizedCaseInsensitiveContains(query) }
+    }
+
+    var selectedTagFilterLabel: String {
+        selectedTagFilter ?? "All tags"
+    }
+
+    var selectedTagClipTags: [ClipTag] {
+        guard selectedTagFilter != nil else { return clipTags.filter { !$0.displayTags.isEmpty } }
+        return clipTags.filter { clipTag in
+            clipTag.displayTags.contains { tagKey($0) == tagKey(selectedTagFilter ?? "") }
         }
     }
 
@@ -264,7 +356,11 @@ final class LibraryViewModel {
             byPerson = byFile
         }
 
-        let byScope = byPerson.filter { segment in
+        let byTag = byPerson.filter { segment in
+            matchesSelectedTag(relativePath: segment.relativePath)
+        }
+
+        let byScope = byTag.filter { segment in
             switch segmentScope {
             case .all:
                 true
@@ -303,6 +399,7 @@ final class LibraryViewModel {
             .filter { moment in
                 let matchesTheme = clipThemeFilter == Self.allThemesFilter || moment.theme == clipThemeFilter
                 let matchesQuality = clipQualityFilter == Self.allQualitiesFilter || moment.quality == clipQualityFilter
+                let matchesTag = matchesSelectedTag(relativePath: moment.relativePath)
                 let matchesQuery = query.isEmpty
                     || moment.text.localizedCaseInsensitiveContains(query)
                     || moment.relativePath.localizedCaseInsensitiveContains(query)
@@ -310,7 +407,7 @@ final class LibraryViewModel {
                     || moment.quality.localizedCaseInsensitiveContains(query)
                     || (moment.speaker?.localizedCaseInsensitiveContains(query) ?? false)
                     || clipTagsMatch(relativePath: moment.relativePath, query: query)
-                return matchesTheme && matchesQuality && matchesQuery
+                return matchesTheme && matchesQuality && matchesTag && matchesQuery
             }
     }
 
@@ -348,6 +445,9 @@ final class LibraryViewModel {
             if !clipQualities.contains(clipQualityFilter) {
                 clipQualityFilter = Self.allQualitiesFilter
             }
+            if let selectedTagFilter, !tagSummaries.contains(where: { tagKey($0.label) == tagKey(selectedTagFilter) }) {
+                self.selectedTagFilter = nil
+            }
             statusMessage = "\(files.count) files, \(segments.count) transcript segments, \(clipMoments.count) AI picks, \(clipTags.count) tagged clips, \(people.count) people"
             rememberLibrary(snapshot.libraryURL)
             if let firstPick = filteredClipMoments.first(where: { bestSegment(for: $0) != nil }) {
@@ -375,6 +475,8 @@ final class LibraryViewModel {
     }
 
     func choose(file: TranscriptFile?) {
+        libraryMode = .review
+        sidebarTab = .files
         selectedPersonID = nil
         resetPersonDrafts()
         selectedFileID = file?.id
@@ -387,10 +489,14 @@ final class LibraryViewModel {
     }
 
     func clearFileSelection() {
+        selectedTagFilter = nil
         choose(file: nil)
     }
 
     func choose(person: PersonProfile?) {
+        libraryMode = .review
+        sidebarTab = .people
+        selectedTagFilter = nil
         selectedPersonID = person?.id
         selectedFileID = nil
         inspectorMode = person == nil ? inspectorMode : .person
@@ -410,7 +516,38 @@ final class LibraryViewModel {
         choose(person: nil)
     }
 
+    func showTagCloud() {
+        libraryMode = .tags
+        sidebarTab = .tags
+        selectedFileID = nil
+        selectedPersonID = nil
+        resetPersonDrafts()
+        settleSelectionAfterFilterChange()
+    }
+
+    func selectTag(_ tag: TagSummary) {
+        libraryMode = .tags
+        sidebarTab = .tags
+        selectedTagFilter = tag.label
+        fileSearchText = ""
+        searchText = ""
+        clipSearchText = ""
+        selectedFileID = nil
+        selectedPersonID = nil
+        resetPersonDrafts()
+        segmentScope = .all
+        settleSelectionAfterFilterChange()
+        statusMessage = "Filtering \(tag.clipCount) clips tagged \(tag.label)"
+    }
+
+    func clearTagFilter() {
+        selectedTagFilter = nil
+        settleSelectionAfterFilterChange()
+        statusMessage = "Showing all tagged clips"
+    }
+
     func startAIAssistedReview() {
+        libraryMode = .review
         selectedFileID = nil
         selectedPersonID = nil
         resetPersonDrafts()
@@ -425,6 +562,7 @@ final class LibraryViewModel {
     }
 
     func focusHighHookAIPick() {
+        libraryMode = .review
         selectedFileID = nil
         selectedPersonID = nil
         resetPersonDrafts()
@@ -588,18 +726,19 @@ final class LibraryViewModel {
     }
 
     func count(for scope: SegmentScope) -> Int {
+        let tagFilteredSegments = segments.filter { matchesSelectedTag(relativePath: $0.relativePath) }
         switch scope {
         case .all:
-            return segments.count
+            return tagFilteredSegments.count
         case .aiPicks:
             return rankedAISegments(highHooksOnly: false).count
         case .highHooks:
             return rankedAISegments(highHooksOnly: true).count
         case .people:
             let fileIDs = Set(people.flatMap { $0.fileIDs })
-            return segments.filter { fileIDs.contains($0.fileID) }.count
+            return tagFilteredSegments.filter { fileIDs.contains($0.fileID) }.count
         case .noAIPick:
-            return segments.filter { matchingClipMoments(for: $0).isEmpty }.count
+            return tagFilteredSegments.filter { matchingClipMoments(for: $0).isEmpty }.count
         }
     }
 
@@ -859,6 +998,10 @@ final class LibraryViewModel {
         selectedClipMomentID = nil
         selectedAnalysisArtifactID = nil
         selectedPersonID = nil
+        selectedTagFilter = nil
+        tagSearchText = ""
+        libraryMode = .review
+        sidebarTab = .overview
         resetPersonDrafts()
         player.pause()
         if let boundaryObserver {
@@ -900,5 +1043,18 @@ final class LibraryViewModel {
             || clipTag.entityTags.contains { $0.localizedCaseInsensitiveContains(query) }
             || clipTag.interviewLanguageTags.contains { $0.localizedCaseInsensitiveContains(query) }
             || clipTag.qualityTags.contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private func matchesSelectedTag(relativePath: String) -> Bool {
+        guard let selectedTagFilter else { return true }
+        guard let clipTag = clipTags(for: relativePath) else { return false }
+        let selectedKey = tagKey(selectedTagFilter)
+        return clipTag.displayTags.contains { tagKey($0) == selectedKey }
+    }
+
+    private func tagKey(_ tag: String) -> String {
+        tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 }
